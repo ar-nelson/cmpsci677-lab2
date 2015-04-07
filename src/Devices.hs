@@ -40,6 +40,7 @@ startDevice dev host port silent =
 nameOf :: Device -> String
 nameOf Temp   = "Temperature Sensor"
 nameOf Motion = "Motion Sensor"
+nameOf Door   = "Door Sensor"
 nameOf dev    = "Smart " ++ show dev
 
 instructions :: Device -> String
@@ -58,6 +59,7 @@ bg :: Device            -- Device type
    -> (String -> IO ()) -- println function
    -> IO String         -- Return value: Error message
 
+recur :: a -> IO (Either String a)
 recur = return . Right
 
 --------------------------------------------------------------------------------
@@ -89,7 +91,8 @@ bg Temp send recv _ println = messageLoop recv handle (DegreesCelsius 0)
         handle st _ = recur st
 
 --------------------------------------------------------------------------------
--- The motion sensor can only push state updates via `ReportState` messages.
+-- The motion sensor pushes `ReportState` broadcast messages when its state is
+-- changed, and can also be queried for its state.
 --
 -- The console inputs `on` and `off` simulate the detector seeing motion/no
 -- motion, respectively.
@@ -109,6 +112,30 @@ bg Motion send recv i println =
           sendRsp mid (HasState st) send >> recur st
         handle st (Req mid req) =
           sendRsp mid (NotSupported Motion req) send >> recur st
+        handle st (Unknown s) =
+          println ("Unparseable message: '" ++ s ++ "'") >> recur st
+        handle st _ = recur st
+
+--------------------------------------------------------------------------------
+-- The door sensor pushes `ReportState` broadcast messages when its state is
+-- changed, and can also be queried for its state.
+--
+-- The console inputs `on` and `off` open and close the door, respectively.
+
+bg Door send recv i println = messageLoop recv handle (DoorOpen False)
+  where handle :: MessageHandler State
+        setState v = do println $ "State changed to " ++ show v ++ "."
+                        let st = DoorOpen v
+                        writeChan send $ Right (Brc (ReportState i st))
+                        recur st
+        handle _  (UserInput "on")  = setState True
+        handle _  (UserInput "off") = setState False
+        handle st (UserInput "state") = println (show st) >> recur st
+        handle st (UserInput _) = println "Invalid input." >> recur st
+        handle st (Req mid (QueryState _)) =
+          sendRsp mid (HasState st) send >> recur st
+        handle st (Req mid req) =
+          sendRsp mid (NotSupported Door req) send >> recur st
         handle st (Unknown s) =
           println ("Unparseable message: '" ++ s ++ "'") >> recur st
         handle st _ = recur st

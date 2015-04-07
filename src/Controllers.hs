@@ -5,12 +5,9 @@
 module Controllers(startController, Controller(..)) where
 
 import           Control.Concurrent
-import           Control.Concurrent.Chan
-import           Control.Concurrent.STM
 import           Control.Concurrent.Suspend.Lifted (mDelay)
 import           Control.Concurrent.Timer
 import           Control.Monad
-import           Data.Time.Clock
 import           Safe                              (readMay)
 import           System.IO
 
@@ -184,6 +181,8 @@ startController UserInterface host port silent =
         showRsp (HasState (DegreesCelsius c)) = show c ++ "\0176C"
         showRsp (HasState (MotionDetected True)) = "Motion detected!"
         showRsp (HasState (MotionDetected False)) = "No motion detected."
+        showRsp (HasState (DoorOpen True)) = "Door is open."
+        showRsp (HasState (DoorOpen False)) = "Door is closed."
         showRsp (HasState (Power p)) = show p
         showRsp (NoDevice id) = "Error: No device with " ++ show id
         showRsp (NotSupported dev req) =

@@ -12,7 +12,7 @@ usage = do
   prog <- getProgName
   putStrLn $ unlines [
     "Usage: " ++ prog ++ " <command> <host> <port> [silent]",
-    "  <command> is one of [temp, motion, bulb, outlet, gateway, control <x>],",
+    "  <command> is one of [temp, motion, door, bulb, outlet, gateway, control <x>],",
     "    where <x> is one of [heater, light, user, testlog].",
     "  <host> is the gateway hostname (0.0.0.0 for the gateway itself).",
     "  <port> is the gateway TCP port.",
@@ -33,6 +33,7 @@ main =
 start :: String -> String -> String -> Bool -> IO ()
 start "temp"    h p    s = startDevice Temp h p s
 start "motion"  h p    s = startDevice Motion h p s
+start "door"    h p    s = startDevice Door h p s
 start "bulb"    h p    s = startDevice Bulb h p s
 start "outlet"  h p    s = startDevice Outlet h p s
 start "gateway" _ port _ = startGateway port

@@ -16,6 +16,7 @@ import           System.Random
 
 data Device = Temp
             | Motion
+            | Door
             | Bulb
             | Outlet
             deriving (Eq, Show, Read)
@@ -30,6 +31,7 @@ data OnOff  = On
 
 data State  = DegreesCelsius Int
             | MotionDetected Bool
+            | DoorOpen Bool
             | Power OnOff
             deriving (Eq, Show, Read)
 
