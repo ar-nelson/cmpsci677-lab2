@@ -2,6 +2,7 @@
 
 module Protocol(module Protocol) where
 
+import           Data.Word
 import           TimeProtocol
 
 data MemberType = Gateway
@@ -63,9 +64,8 @@ data DBEventQuery = QueryJoin
 data Request = Register MemberType
              | QueryState
              | ChangeState OnOff
-             | QueryTime
-             | AdjustTime ClockOffset
-             | IWon
+             | ReportTime ClockTime
+             | LeaderOK
              | Log Timestamp ID Broadcast
              | DBQuery [(ID, DBEventQuery)]
              deriving (Show, Read)
@@ -77,8 +77,7 @@ data Request = Register MemberType
 data Response = Success
               | RegisteredAs ID
               | HasState State
-              | ReportTime ClockTime
-              | LeaderOK
+              | AdjustTime ClockOffset
               | DBResultSet [Maybe DBEntry]
               | NotFound ID
               | NotSupported MemberType Request
@@ -90,7 +89,9 @@ data Response = Success
 data Broadcast = ReportState State
                | ChangeMode Mode
                | TextMessage String
+               | QueryTime
                | Election
+               | IWon
                deriving (Show, Read)
 
 -- A `Message` is anything that can be sent over a network, plus a few special
@@ -107,6 +108,6 @@ data Message = Request Conversation Request
 
 data Conversation = Conversation { requester      :: ID
                                  , responder      :: ID
-                                 , conversationID :: Int
+                                 , conversationID :: Word32
                                  } deriving (Show, Read)
 

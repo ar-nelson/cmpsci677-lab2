@@ -4,19 +4,18 @@
 
 module Controllers(startController, Controller(..)) where
 
-import           Control.Concurrent.Killable
 import           Control.Concurrent.Lifted
 import           Control.Monad
 import           Control.Monad.Trans
-import           Control.Monad.Trans.Control (liftBaseDiscard)
 import           Data.List.Split
-import           Safe                        (readMay)
+import           Data.Word
+import           Safe                      (readMay)
 import           System.IO
-import           System.Timer.Updatable
 
 import           Communication
 import           Protocol
 import           TimeProtocol
+import           TimeServer
 
 data Controller = Heater | Light | UserInterface | TestLogger
 
@@ -29,7 +28,7 @@ heatOffThreshold = 2
 tempCheckIntervalMicros :: Int
 tempCheckIntervalMicros = 1000000 -- 1 second
 
-lightDelayMicros :: Delay
+lightDelayMicros :: Int
 lightDelayMicros = 5 * 60 * 1000000 -- 5 minutes
 
 askForDeviceID :: String -> Bool -> Timed ID
@@ -46,12 +45,12 @@ startController :: Controller -> String -> String -> Bool -> Timed ()
 -- if the temperature passes certain thresholds.
 
 startController Heater host port silent =
-  do (send, recv, myID) <- connectAndRegister Controller host port silent
+  do (send, recv, myID) <- connectWithTimeServer Controller host port silent
      let println = liftIO . unless silent . putStrLn
      tempID   <- askForDeviceID "Temperature Sensor" silent
      outletID <- askForDeviceID "Smart Outlet" silent
      println "Running controller..."
-     let handle :: MessageHandler Int
+     let handle :: MessageHandler Word32
          handle lastCID (Response conv rsp)
            | conversationID conv == lastCID = case rsp of
                HasState (DegreesCelsius c) ->
@@ -84,17 +83,18 @@ startController Heater host port silent =
 -- but will send a `TextMessage` broadcast when motion is detected.
 
 startController Light host port silent =
-  do (send, recv, myID) <- connectAndRegister Controller host port silent
+  do (send, recv, myID) <- connectWithTimeServer Controller host port silent
      let println = liftIO . unless silent . putStrLn
      motionID <- askForDeviceID "Motion Sensor" silent
      bulbID   <- askForDeviceID "Smart Light Bulb" silent
-     let turnOff = do conv <- myID `to` bulbID
-                      sendReq conv (ChangeState Off) send
-                      println "Turning light off."
-     timer <- liftBaseDiscard (`replacer` lightDelayMicros) turnOff
-     let resetTimer = liftIO (renewIO timer lightDelayMicros)
+     let lightTimer = do threadDelay lightDelayMicros
+                         println "Turning light off."
+                         conv <- myID `to` bulbID
+                         sendReq conv (ChangeState Off) send
+     timer <- newMVar =<< fork lightTimer
      println "Running controller..."
-     let awayMsg = TextMessage "Motion detected while user is away!"
+     let resetTimer = fork lightTimer >>= swapMVar timer >>= killThread
+         awayMsg = TextMessage "Motion detected while user is away!"
          handle :: MessageHandler Mode
          handle _ (Broadcast _ (ChangeMode st')) =
            lift (println ("Set user mode to " ++ show st')) >> return st'
@@ -103,7 +103,7 @@ startController Light host port silent =
                 do conv <- myID `to` bulbID
                    sendReq conv (ChangeState On) send
                    println "Turning light on."
-                   liftIO $ kill timer
+                   readMVar timer >>= killThread
               return Home
          handle Home (Broadcast i (ReportState (MotionDetected False))) =
            do when (i == motionID) $ lift $
@@ -128,7 +128,7 @@ startController Light host port silent =
 -- mode uses less pretty printing).
 
 startController UserInterface host port silent =
-  do (send, recv, myID) <- connectAndRegister Controller host port silent
+  do (send, recv, myID) <- connectWithTimeServer Controller host port silent
      let println = liftIO . unless silent . putStrLn
          console = do liftIO $ unless silent $ do putStr "> "
                                                   hFlush stdout

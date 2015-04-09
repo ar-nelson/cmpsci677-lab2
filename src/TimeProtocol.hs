@@ -3,11 +3,14 @@
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE TypeFamilies               #-}
 
-module TimeProtocol( Timestamp(..)
+module TimeProtocol( Timestamp
                    , Lamport
                    , ClockTime
                    , ClockOffset
+                   , clockTime
+                   , lamportTime
                    , offsetBy
+                   , timeDiff
                    , TimeState
                    , initTimeState
                    , Timed
@@ -26,33 +29,37 @@ import           Control.Concurrent.STM
 import           Control.Monad.Base
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Control
-import           Data.Fixed                  (Pico)
 import           Data.Time.Clock
 import           Data.Time.Format
 
 --------------------------------------------------------------------------------
 -- Time datatypes.
 
-data Timestamp = Timestamp { clockTime   :: ClockTime
-                           , lamportTime :: Lamport
-                           } deriving (Show, Read)
+data Timestamp = Timestamp ClockTime Lamport deriving (Show, Read)
+
+clockTime (Timestamp c _) = c
+lamportTime (Timestamp _ l) = l
 
 newtype Lamport = Lamport Integer deriving (Eq, Ord, Show, Read, Num)
 
 newtype ClockTime = ClockTime UTCTime deriving (Eq, Ord, FormatTime, ParseTime)
 
-newtype ClockOffset = ClockOffset Pico
+newtype ClockOffset = ClockOffset Double
                     deriving (Eq, Ord, Num, Fractional, Show, Read)
 
 instance Show ClockTime where
-  show = formatTime defaultTimeLocale "%s.Q"
+  show = formatTime defaultTimeLocale "%s%Q"
 
 instance Read ClockTime where
-  readsPrec _ = readSTime True defaultTimeLocale "%s.Q"
+  readsPrec _ = readSTime True defaultTimeLocale "%s%Q"
 
 offsetBy :: ClockTime -> ClockOffset -> ClockTime
 ClockTime utc `offsetBy` ClockOffset ms = ClockTime (conv ms `addUTCTime` utc)
   where conv = fromRational . toRational
+
+timeDiff :: ClockTime -> ClockTime -> ClockOffset
+timeDiff (ClockTime utc1) (ClockTime utc2) =
+  (ClockOffset . fromRational . toRational) (diffUTCTime utc1 utc2)
 
 --------------------------------------------------------------------------------
 -- The Timed monad contains I/O computations with a logical ordering, according
@@ -82,7 +89,7 @@ runTimed :: Timed a -> TimeState -> IO a
 runTimed (Timed m) = runReaderT m
 
 updateClockOffset :: (MonadReader TimeState m, MonadIO m) => ClockOffset -> m ()
-updateClockOffset o = asks clockOffsetV >>= stm . flip writeTVar o
+updateClockOffset o = asks clockOffsetV >>= stm . flip modifyTVar (+ o)
 
 newTimestamp :: (MonadReader TimeState m, MonadIO m) => m Timestamp
 newTimestamp = do stLamport  <- asks lamportTimeV

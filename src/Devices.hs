@@ -9,6 +9,7 @@ import           System.IO
 import           Communication
 import           Protocol
 import           TimeProtocol
+import           TimeServer
 
 --------------------------------------------------------------------------------
 -- All devices present a console interface that allows a user to query and/or
@@ -16,7 +17,7 @@ import           TimeProtocol
 
 startDevice :: Device -> HostName -> String -> Bool -> Timed ()
 startDevice dev host port silent =
-  do (send, recv, i) <- connectAndRegister (Device dev) host port silent
+  do (send, recv, i) <- connectWithTimeServer (Device dev) host port silent
      let -- If the `silent` command-line argument was provided, this interface
          -- will not output anything except the device's ID.
          println = liftIO . unless silent . putStrLn
@@ -29,7 +30,7 @@ startDevice dev host port silent =
                       if input == "exit"
                         then println "Goodbye!"
                         else do writeChanM recv (UserInput input)
-                                liftIO $ unless silent $ threadDelay 1000
+                                unless silent $ threadDelay 1000
                                 console
      println $ nameOf dev ++ " console interface"
      println $ instructions dev

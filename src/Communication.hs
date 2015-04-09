@@ -74,13 +74,15 @@ connectAndRegister mt host port silent =
      connectToGateway host port send recv silent
      conv <- invalidID `to` gatewayID
      sendReq conv (Register mt) send
-     rspMsg <- readChanM recv
-     case rspMsg of
-       Response conv' rsp ->
-         if conversationID conv == conversationID conv'
-            then handleRsp rsp send recv
-            else wrongRsp
-       _ -> wrongRsp
+     let handleLoop =
+           do rspMsg <- readChanM recv
+              case rspMsg of
+                Response conv' rsp ->
+                  if conversationID conv == conversationID conv'
+                     then handleRsp rsp send recv
+                     else handleLoop
+                _ -> handleLoop
+     handleLoop
   where handleRsp (RegisteredAs (ID i)) send recv =
           liftIO $ do unless silent $ putStr "Connected with ID "
                       print i
@@ -88,7 +90,6 @@ connectAndRegister mt host port silent =
                       return (send, recv, ID i)
         handleRsp rsp _ _ = error $
           "Invalid response to Register: " ++ show rsp
-        wrongRsp = error "Got something other than response to Register."
 
 --------------------------------------------------------------------------------
 
@@ -133,7 +134,7 @@ socketToChannels sock send recv silent =
      let sendFail :: SomeException -> Timed ()
          sendFail e = do println $ "Send thread died: " ++ show e
                          throwTo recvThread e
-     _ <- fork $ catch (sendLoop h send) sendFail >> liftIO (hClose h)
+     _ <- fork $ finally (catch (sendLoop h send) sendFail) (liftIO (hClose h))
      return ()
   where println = liftIO . unless silent . putStrLn
 

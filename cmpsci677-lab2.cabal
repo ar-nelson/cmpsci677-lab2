@@ -22,7 +22,6 @@ executable cmpsci677-lab2
     network,
     stm,
     random,
-    timers-updatable,
     split,
     safe,
     time >= 1.5,

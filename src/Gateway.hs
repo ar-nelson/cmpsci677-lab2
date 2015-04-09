@@ -3,8 +3,9 @@ module Gateway(startGateway) where
 import           Control.Concurrent.Lifted
 import           Control.Concurrent.STM
 import           Control.Exception.Lifted
+import           Control.Monad
 import           Control.Monad.Trans
-import           Data.Foldable             (for_)
+import           Data.Foldable             (for_, traverse_)
 import           Data.Map                  (Map)
 import qualified Data.Map                  as Map
 import           Network.Socket            hiding (Broadcast, recv, send)
@@ -13,6 +14,7 @@ import           Prelude                   hiding (catch)
 import           Communication
 import           Protocol
 import           TimeProtocol
+import           TimeServer
 
 --------------------------------------------------------------------------------
 
@@ -33,16 +35,31 @@ startGateway port =
                   listen sock 5
                   return sock
      st   <- liftIO initGatewayState
+     timeSend <- newChan
+     timeRecv <- newChan
+     gwRecv   <- runTimeServer timeSend timeRecv gatewayID False
+     let gwSend = timeSend
+     stm $ addMember MemberEntry { memberID = gatewayID
+                                 , memberType = Gateway
+                                 , memberSendChan = timeRecv
+                                 } st
+     _ <- fork . forever $ readChanM gwRecv >>= \m -> case m of
+            Request conv req ->
+              stm (getMember (requester conv) st) >>= traverse_
+                (sendRsp conv (NotSupported Gateway req) . memberSendChan)
+            _ -> return ()
+     _ <- fork $ routeMessages st "Local Time Server" gwRecv gwSend (Just gatewayID)
      procConnections st sock
   where procConnections :: GatewayState -> Socket -> Timed ()
         procConnections st mastersock =
           do (connsock, clientaddr) <- liftIO (accept mastersock)
-             send <- newChan :: Timed MessageChan
-             recv <- newChan :: Timed MessageChan
+             send <- newChan
+             recv <- newChan
              socketToChannels connsock send recv False
              stm (addChannel clientaddr send st)
-             fork $ finally (routeMessages st clientaddr send recv Nothing)
-                            (stm (removeChannel clientaddr st))
+             _ <- fork $ finally (routeMessages st (show clientaddr) send recv
+                                    Nothing)
+                                 (stm (removeChannel clientaddr st))
              procConnections st mastersock
 
 -- The gateway takes all messages received from connected clients (whether they
@@ -56,14 +73,15 @@ startGateway port =
 -- controllers.
 
 routeMessages :: GatewayState
-              -> SockAddr
+              -> String
               -> MessageChan
               -> MessageChan
               -> Maybe ID
               -> Timed ()
 
 routeMessages st addr send recv myID =
-  catch (fmap Right (readChanM recv >>= route)) (return . Left)
+  catch (fmap Right (readChanM recv >>= \m -> printDebug m >> route m))
+        (return . Left)
     >>= either err (routeMessages st addr send recv)
   where
     route :: Message -> Timed (Maybe ID)
@@ -74,17 +92,20 @@ routeMessages st addr send recv myID =
             fwdTo Nothing  = writeChanM send $
               Response conv (NotFound (responder conv))
     route (Response conv rsp)
-      | requester conv == gatewayID = return myID -- Ignore responses.
+      | requester conv == gatewayID =
+          do Just MemberEntry{memberSendChan=ch} <- stm $ getMember gatewayID st
+             sendRsp conv rsp ch
+             return myID
       | otherwise = stm (getMember (requester conv) st) >>= fwdTo >> return myID
-      where fwdTo (Just e) = writeChanM (memberSendChan e) $ Response conv rsp
-            fwdTo Nothing  = liftIO $ putStrLn $ "Failed to deliver response "
+      where fwdTo (Just e) = sendRsp conv rsp (memberSendChan e)
+            fwdTo Nothing  = liftIO . putStrLn $ "Failed to deliver response "
                                ++ show rsp ++ " to " ++ show (requester conv)
                                ++ ": no member with this ID."
     route (Broadcast i brc) =
       do ms <- stm (listMembers st)
          for_ ms $ \m -> writeChanM (memberSendChan m) (Broadcast i brc)
          return myID
-    route msg = do liftIO $ putStrLn $ "Cannot route message " ++ show msg
+    route msg = do liftIO . putStrLn $ "Cannot route message " ++ show msg
                    return myID
 
     -- The `Register` request is handled by the gateway directly, and stores
@@ -98,17 +119,21 @@ routeMessages st addr send recv myID =
       where register = do for_ myID $ flip removeMember st
                           ni <- nextID st
                           let entry = MemberEntry { memberID       = ni
-                                                  , memberAddr     = addr
                                                   , memberType     = m
                                                   , memberSendChan = send }
                           addMember entry st
                           return ni
     handleLocally conv req =
-      writeChanM send (Response conv (NotSupported Gateway req)) >> return myID
+      do Just MemberEntry {memberSendChan = ch} <- stm $ getMember gatewayID st
+         sendReq conv req ch
+         return myID
+
+    --printDebug msg = liftIO . putStrLn $ show myID ++ " sent " ++ show msg
+    printDebug _ = return ()
 
     err :: SomeException -> Timed ()
     err e = liftIO $ do putStrLn $
-                          "Connection to " ++ show addr ++ " closed: " ++ show e
+                          "Connection to " ++ addr ++ " closed: " ++ show e
                         for_ myID $ \i -> atomically (removeMember i st)
                           >> putStrLn ("Removed device with " ++ show i)
 
@@ -131,7 +156,6 @@ initGatewayState = atomically $
 
 data MemberEntry = MemberEntry {
   memberID       :: ID,
-  memberAddr     :: SockAddr,
   memberType     :: MemberType,
   memberSendChan :: MessageChan
 }
