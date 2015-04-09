@@ -1,14 +1,16 @@
 module Main where
 
+import           Control.Monad.Trans (liftIO)
 import           System.Environment
 
 import           Controllers
 import           Devices
 import           Gateway
 import           Protocol
+import           TimeProtocol
 
-usage :: IO ()
-usage = do
+usage :: Timed ()
+usage = liftIO $ do
   prog <- getProgName
   putStrLn $ unlines [
     "Usage: " ++ prog ++ " <command> <host> <port> [silent]",
@@ -22,15 +24,16 @@ usage = do
 
 main :: IO ()
 main =
-  do args <- getArgs
-     case args of
+  do time <- initTimeState
+     args <- getArgs
+     flip runTimed time $ case args of
        ["control", c, host, port, "silent"] -> control c host port True
        ["control", c, host, port]           -> control c host port False
        [command, host, port, "silent"]      -> start command host port True
        [command, host, port]                -> start command host port False
        _ -> usage
 
-start :: String -> String -> String -> Bool -> IO ()
+start :: String -> String -> String -> Bool -> Timed ()
 start "temp"    h p    s = startDevice Temp h p s
 start "motion"  h p    s = startDevice Motion h p s
 start "door"    h p    s = startDevice Door h p s
@@ -39,7 +42,7 @@ start "outlet"  h p    s = startDevice Outlet h p s
 start "gateway" _ port _ = startGateway port
 start _ _ _ _ = usage
 
-control :: String -> String -> String -> Bool -> IO ()
+control :: String -> String -> String -> Bool -> Timed ()
 control "heater"  h p s = startController Heater h p s
 control "light"   h p s = startController Light h p s
 control "user"    h p s = startController UserInterface h p s

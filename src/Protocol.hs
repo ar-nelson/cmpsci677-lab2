@@ -1,18 +1,14 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-module Protocol( Device(..)
-               , Mode(..)
-               , OnOff(..)
-               , State(..)
-               , ID(..)
-               , MsgID(..)
-               , Request(..)
-               , Response(..)
-               , Broadcast(..)
-               , Message(..)
-) where
+module Protocol(module Protocol) where
 
-import           System.Random
+import           TimeProtocol
+
+data MemberType = Gateway
+                | Database
+                | Controller
+                | Device Device
+                deriving (Eq, Show, Read)
 
 data Device = Temp
             | Motion
@@ -35,15 +31,43 @@ data State  = DegreesCelsius Int
             | Power OnOff
             deriving (Eq, Show, Read)
 
-newtype ID = ID Int deriving (Eq, Ord, Show, Read)
+newtype ID = ID Int deriving (Eq, Ord, Show, Read, Num)
+
+invalidID :: ID
+invalidID = -1
+
+gatewayID :: ID
+gatewayID = 0
+
+--------------------------------------------------------------------------------
+-- Database datatypes.
+
+data DBEntry = DBEntry ID Timestamp DBEvent deriving (Show, Read)
+
+data DBEvent = RegisterEvent MemberType
+             | LeaveEvent
+             | BroadcastEvent Broadcast
+             deriving (Show, Read)
+
+data DBEventQuery = QueryJoin
+                  | QueryLeave
+                  | QueryRegister
+                  | QueryReportState
+                  | QueryChangeMode
+                  | QueryTextMessage
+                  deriving (Show, Read)
 
 -- A `Request` is an RPC, which the gateway will either forward to a device (if
 -- it contains an `ID`) or handle directly (if it does not contain an `ID`).
 
-data Request = Register Device
-             | Subscribe
-             | QueryState ID
-             | ChangeState ID OnOff
+data Request = Register MemberType
+             | QueryState
+             | ChangeState OnOff
+             | QueryTime
+             | AdjustTime ClockOffset
+             | IWon
+             | Log Timestamp ID Broadcast
+             | DBQuery [(ID, DBEventQuery)]
              deriving (Show, Read)
 
 -- A `Response` is the return value of an RPC. Some `Response`s are valid return
@@ -53,16 +77,20 @@ data Request = Register Device
 data Response = Success
               | RegisteredAs ID
               | HasState State
-              | NoDevice ID
-              | NotSupported Device Request
+              | ReportTime ClockTime
+              | LeaderOK
+              | DBResultSet [Maybe DBEntry]
+              | NotFound ID
+              | NotSupported MemberType Request
               deriving (Show, Read)
 
 -- A `Broadcast` is a message sent to all currently connected controllers.
 -- Broadcasts are used for push-style updates.
 
-data Broadcast = ReportState ID State
+data Broadcast = ReportState State
                | ChangeMode Mode
                | TextMessage String
+               | Election
                deriving (Show, Read)
 
 -- A `Message` is anything that can be sent over a network, plus a few special
@@ -70,16 +98,15 @@ data Broadcast = ReportState ID State
 -- includes command-line user input (to make CLI event loops simpler) and
 -- a special case for unparseable input.
 
-data Message = Req MsgID Request
-             | Rsp MsgID Response
-             | Brc Broadcast
+data Message = Request Conversation Request
+             | Response Conversation Response
+             | Broadcast ID Broadcast
              | UserInput String
              | Unknown String
              deriving (Show, Read)
 
--- `Request`s and `Response`s have an attached message ID, which is
--- a randomly-assigned integer used by the gateway to match responses to
--- requests.
-
-newtype MsgID = MsgID Int deriving (Eq, Ord, Show, Read, Random)
+data Conversation = Conversation { requester      :: ID
+                                 , responder      :: ID
+                                 , conversationID :: Int
+                                 } deriving (Show, Read)
 
