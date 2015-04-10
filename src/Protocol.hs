@@ -56,6 +56,7 @@ data DBEventQuery = QueryRegister
                   | QueryReportState
                   | QueryChangeMode
                   | QueryTextMessage
+                  | QueryPresent
                   deriving (Show, Read)
 
 -- A `Request` is an RPC, which the gateway will either forward to a device (if

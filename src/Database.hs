@@ -42,6 +42,7 @@ startDatabase host port silent =
                  lookup (id, QueryReportState) = Map.lookup id (dbState db)
                  lookup (_,  QueryChangeMode)  = dbMode db
                  lookup (id, QueryTextMessage) = Map.lookup id (dbTextMsg db)
+                 lookup (id, QueryPresent)     = Map.lookup id (dbPresent db)
 
          handle db (Request conv req) =
            sendRsp conv (NotSupported Database req) send >> return db
@@ -64,6 +65,7 @@ data DB = DB { dbRegister :: Map ID DBEntry
              , dbState    :: Map ID DBEntry
              , dbMode     :: Maybe DBEntry
              , dbTextMsg  :: Map ID DBEntry
+             , dbPresent  :: Map ID DBEntry
              }
 
 reloadDatabase :: Timed DB
@@ -76,7 +78,7 @@ reloadDatabase =
             foldM addAndUpdate initDB entries
         ) $ \e -> if isDoesNotExistError e then return initDB
                                            else liftIO $ ioError e
-  where initDB = DB Map.empty Map.empty Map.empty Nothing Map.empty
+  where initDB = DB Map.empty Map.empty Map.empty Nothing Map.empty Map.empty
 
 addEntry :: DB -> DBEntry -> DB
 addEntry db entry =
@@ -88,6 +90,8 @@ addEntry db entry =
       db { dbState   = addTo (dbState db) }
     BroadcastEvent TextMessage{} ->
       db { dbTextMsg = addTo (dbTextMsg db) }
+    BroadcastEvent Present ->
+      db { dbPresent = addTo (dbPresent db) }
     _ -> db
   where DBEntry eid _ event = entry
         addTo = Map.insert eid entry
