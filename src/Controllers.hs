@@ -20,18 +20,6 @@ import           TimeServer
 
 data Controller = Heater | Light | UserInterface | TestLogger
 
-heatOnThreshold :: Int
-heatOnThreshold  = 1
-
-heatOffThreshold :: Int
-heatOffThreshold = 2
-
-tempCheckIntervalMicros :: Int
-tempCheckIntervalMicros = 1000000 -- 1 second
-
-lightDelayMicros :: Int
-lightDelayMicros = 5 * 60 * 1000000 -- 5 minutes
-
 askForDeviceID :: String -> Bool -> Timed ID
 askForDeviceID name silent = liftIO $ liftM ID $
   unless silent (putStr (name ++ " ID: ") >> hFlush stdout) >> readLn
@@ -76,6 +64,9 @@ startController Heater host port silent =
      println ("Controller died: " ++ why)
 
    where println = liftIO . unless silent . putStrLn
+         heatOnThreshold  = 1
+         heatOffThreshold = 2
+         tempCheckIntervalMicros = 1000000 -- 1 second
 
 --------------------------------------------------------------------------------
 -- Task 2: Preparing for Spring Break
@@ -131,6 +122,18 @@ startController Light host port silent =
 
    where println = liftIO . unless silent . putStrLn
          awayMsg = TextMessage "Motion detected while user is away!"
+         lightDelayMicros = 5 * 60 * 1000000 -- 5 minutes
+
+--------------------------------------------------------------------------------
+-- Task 3: Event Ordering
+--
+-- The security controller changes the user's status between `Home` and `Away`
+-- based on input from a door sensor, a motion sensor, and a presence sensor.
+-- It confirms the order of these events using a database. If a person enters
+-- the home (door open followed by motion detected), then the controller will
+-- send a text message broadcast.
+
+-- TODO
 
 --------------------------------------------------------------------------------
 -- The user interface is a special kind of controller: it takes console input in

@@ -9,7 +9,7 @@ data MemberType = Gateway
                 | Database
                 | Controller
                 | Device Device
-                deriving (Eq, Show, Read)
+                deriving (Eq, Ord, Show, Read)
 
 data Device = Temp
             | Motion
@@ -17,21 +17,21 @@ data Device = Temp
             | Presence
             | Bulb
             | Outlet
-            deriving (Eq, Show, Read)
+            deriving (Eq, Ord, Show, Read)
 
 data Mode   = Home
             | Away
-            deriving (Eq, Show, Read)
+            deriving (Eq, Ord, Show, Read)
 
 data OnOff  = On
             | Off
-            deriving (Eq, Show, Read)
+            deriving (Eq, Ord, Show, Read)
 
 data State  = DegreesCelsius Int
             | MotionDetected Bool
             | DoorOpen Bool
             | Power OnOff
-            deriving (Eq, Show, Read)
+            deriving (Eq, Ord, Show, Read)
 
 newtype ID = ID Int deriving (Eq, Ord, Show, Read, Num)
 
@@ -49,15 +49,7 @@ data DBEntry = DBEntry ID Timestamp DBEvent deriving (Show, Read)
 data DBEvent = RegisterEvent MemberType
              | LeaveEvent
              | BroadcastEvent Broadcast
-             deriving (Show, Read)
-
-data DBEventQuery = QueryRegister
-                  | QueryLeave
-                  | QueryReportState
-                  | QueryChangeMode
-                  | QueryTextMessage
-                  | QueryPresent
-                  deriving (Show, Read)
+             deriving (Eq, Ord, Show, Read)
 
 -- A `Request` is an RPC, which the gateway will either forward to a device (if
 -- it contains an `ID`) or handle directly (if it does not contain an `ID`).
@@ -68,7 +60,7 @@ data Request = Register MemberType
              | ReportTime ClockTime
              | LeaderOK
              | DBInsert DBEntry
-             | DBQuery [(ID, DBEventQuery)]
+             | DBQuery [(ID, DBEvent)]
              deriving (Show, Read)
 
 -- A `Response` is the return value of an RPC. Some `Response`s are valid return
@@ -79,7 +71,7 @@ data Response = Success
               | RegisteredAs ID
               | HasState State
               | AdjustTime ClockOffset
-              | DBResultSet [Maybe DBEntry]
+              | DBResultSet [Maybe Timestamp]
               | NotFound ID
               | NotSupported MemberType Request
               deriving (Show, Read)
@@ -94,7 +86,7 @@ data Broadcast = ReportState State
                | QueryTime
                | Election
                | IWon
-               deriving (Show, Read)
+               deriving (Eq, Ord, Show, Read)
 
 -- A `Message` is anything that can be sent over a network, plus a few special
 -- cases. This includes `Request`s, `Response`s, and `Broadcast`s, but it also

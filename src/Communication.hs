@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TypeFamilies          #-}
 
 module Communication( connectToGateway
                     , registerWithGateway
@@ -106,18 +105,6 @@ connectAndRegister mt host port silent =
 type MessageM    = Either String (Timestamped Message)
 type MessageChan = Chan MessageM
 
-killChanM :: MonadBase IO m => MessageChan -> String -> m ()
-killChanM c = writeChan c . fail
-
-readChanM :: (MonadBase IO m, MonadIO m, MonadReader TimeState m)
-          => MessageChan -> m Message
-readChanM c = runExceptT (ExceptT (readChan c) >>= unstamp)
-                >>= either error return
-
-writeChanM :: (MonadBase IO m, MonadIO m, MonadReader TimeState m)
-           => MessageChan -> Message -> m ()
-writeChanM c m = stamp m >>= writeChan c . return
-
 -- Creating a connection spawns two new threads (one for send, one for recv),
 -- each of which uses the provided channels. If the connection is closed for any
 -- reason, the threads will terminate.
@@ -164,12 +151,10 @@ recvLoop h chan = liftIO (hGetLine h) >>= parse >>= toChan >> recvLoop h chan
         toChan  = writeChan chan . return
 
 --------------------------------------------------------------------------------
-
--- The message handler is a function that takes a current state and a message,
--- performs some I/O action(s), then returns either
 --
--- * `Right st`, a new state for the next message loop iteration, or
--- * `Left String`, an error message which ends the loop.
+-- The message handler is a function that takes a current state and a message,
+-- performs some I/O action(s), then either `returns` a new state for the next
+-- iteration, or `fail`s and ends the loop with an error message.
 
 type HandlerState   st = ExceptT String Timed st
 type MessageHandler st = st -> Message -> HandlerState st
@@ -178,6 +163,20 @@ messageLoop :: MessageChan -> MessageHandler st -> st -> Timed String
 messageLoop chan handler st =
   runExceptT (ExceptT (readChan chan) >>= unstamp >>= handler st)
     >>= either return (messageLoop chan handler)
+
+--------------------------------------------------------------------------------
+
+killChanM :: MonadBase IO m => MessageChan -> String -> m ()
+killChanM c = writeChan c . fail
+
+readChanM :: (MonadBase IO m, MonadIO m, MonadReader TimeState m)
+          => MessageChan -> m Message
+readChanM c = runExceptT (ExceptT (readChan c) >>= unstamp)
+                >>= either error return
+
+writeChanM :: (MonadBase IO m, MonadIO m, MonadReader TimeState m)
+           => MessageChan -> Message -> m ()
+writeChanM c m = stamp m >>= writeChan c . return
 
 sendReq :: (MonadBase IO m, MonadIO m, MonadReader TimeState m)
         => Conversation -> Request -> MessageChan -> m ()
@@ -208,6 +207,6 @@ console send recv silent =
      if input == "exit" then exit else eval input
   where exit       = unless silent $ liftIO (putStrLn "Goodbye!")
         eval input = do writeChanM recv (UserInput input)
-                        unless silent $ threadDelay 1000000
+                        unless silent $ threadDelay 100000
                         console send recv silent
 

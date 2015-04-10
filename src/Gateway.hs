@@ -152,7 +152,7 @@ routeMessages st addr send recv myID =
     err e = do liftIO $ putStrLn ("Connection to " ++ addr ++ " closed: " ++ e)
                for_ myID $ \i ->
                  do stm (removeMember i st)
-                    liftIO $ putStrLn ("Removed device with " ++ show i)
+                    liftIO $ putStrLn ("Removed member with " ++ show i)
                     dbs  <- stm $ dbMembers st
                     time <- newTimestamp
                     for_ dbs $ \MemberEntry{memberID=dbi,memberSendChan=dbch} ->

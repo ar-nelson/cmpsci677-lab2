@@ -20,6 +20,8 @@ import           TimeServer
 dbFilename :: FilePath
 dbFilename = "db.txt"
 
+type DB = Map (ID, DBEvent) DBEntry
+
 startDatabase :: HostName -> String -> Bool -> Timed ()
 startDatabase host port silent =
   do initialDB <- reloadDatabase
@@ -37,12 +39,7 @@ startDatabase host port silent =
 
          handle db (Request conv (DBQuery queries)) =
            sendRsp conv (DBResultSet (map lookup queries)) send >> return db
-           where lookup (id, QueryRegister)    = Map.lookup id (dbRegister db)
-                 lookup (id, QueryLeave)       = Map.lookup id (dbLeave db)
-                 lookup (id, QueryReportState) = Map.lookup id (dbState db)
-                 lookup (_,  QueryChangeMode)  = dbMode db
-                 lookup (id, QueryTextMessage) = Map.lookup id (dbTextMsg db)
-                 lookup (id, QueryPresent)     = Map.lookup id (dbPresent db)
+           where lookup = fmap (\(DBEntry _ ts _) -> ts) . flip Map.lookup db
 
          handle db (Request conv req) =
            sendRsp conv (NotSupported Database req) send >> return db
@@ -60,39 +57,22 @@ startDatabase host port silent =
 
   where println = liftIO . unless silent . putStrLn
 
-data DB = DB { dbRegister :: Map ID DBEntry
-             , dbLeave    :: Map ID DBEntry
-             , dbState    :: Map ID DBEntry
-             , dbMode     :: Maybe DBEntry
-             , dbTextMsg  :: Map ID DBEntry
-             , dbPresent  :: Map ID DBEntry
-             }
-
 reloadDatabase :: Timed DB
-reloadDatabase =
-  catch (do contents <- liftIO $ readFile dbFilename
-            let entries = mapMaybe readMay (lines contents)
-                addAndUpdate db e =
-                  updateLamport (lamportTime ts) >> return (addEntry db e)
-                  where DBEntry _ ts _ = e
-            foldM addAndUpdate initDB entries
-        ) $ \e -> if isDoesNotExistError e then return initDB
-                                           else liftIO $ ioError e
-  where initDB = DB Map.empty Map.empty Map.empty Nothing Map.empty Map.empty
+reloadDatabase = catch (liftIO (readFile dbFilename) >>= reload) err
+  where initDB = Map.empty :: DB
+        reload contents = foldM addAndUpdate initDB entries
+          where entries = mapMaybe readMay (lines contents)
+                addAndUpdate db e = do updateLamport (lamportTime time)
+                                       return (addEntry db e)
+                                    where DBEntry _ time _ = e
+        err e | isDoesNotExistError e = return initDB
+              | otherwise             = liftIO $ ioError e
 
 addEntry :: DB -> DBEntry -> DB
-addEntry db entry =
-  case event of
-    RegisterEvent{} -> db { dbRegister = addTo (dbRegister db) }
-    LeaveEvent{}    -> db { dbLeave    = addTo (dbLeave db) }
-    BroadcastEvent ChangeMode{}  -> db { dbMode = Just entry }
-    BroadcastEvent ReportState{} ->
-      db { dbState   = addTo (dbState db) }
-    BroadcastEvent TextMessage{} ->
-      db { dbTextMsg = addTo (dbTextMsg db) }
-    BroadcastEvent Present ->
-      db { dbPresent = addTo (dbPresent db) }
-    _ -> db
-  where DBEntry eid _ event = entry
-        addTo = Map.insert eid entry
+addEntry db (DBEntry id newTime event) =
+  case Map.lookup (id, event) db of
+    Just (DBEntry _ oldTime _) ->
+      if lamportTime newTime >= lamportTime oldTime then update else db
+    Nothing -> update
+  where update = Map.insert (id, event) (DBEntry id newTime event) db
 
