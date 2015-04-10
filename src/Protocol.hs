@@ -14,6 +14,7 @@ data MemberType = Gateway
 data Device = Temp
             | Motion
             | Door
+            | Presence
             | Bulb
             | Outlet
             deriving (Eq, Show, Read)
@@ -88,6 +89,7 @@ data Response = Success
 data Broadcast = ReportState State
                | ChangeMode Mode
                | TextMessage String
+               | Present
                | QueryTime
                | Election
                | IWon

@@ -26,14 +26,16 @@ startDevice dev host port silent =
   where println = liftIO . unless silent . putStrLn
 
 nameOf :: Device -> String
-nameOf Temp   = "Temperature Sensor"
-nameOf Motion = "Motion Sensor"
-nameOf Door   = "Door Sensor"
-nameOf dev    = "Smart " ++ show dev
+nameOf Temp     = "Temperature Sensor"
+nameOf Motion   = "Motion Sensor"
+nameOf Door     = "Door Sensor"
+nameOf Presence = "Presence Sensor"
+nameOf dev      = "Smart " ++ show dev
 
 instructions :: Device -> String
-instructions Temp = "Enter an integer, 'state', or 'exit'."
-instructions _    = "Enter 'on', 'off', 'state', or 'exit'."
+instructions Temp     = "Enter an integer, 'state', or 'exit'."
+instructions Presence = "Enter anything to send push event; 'exit' to exit."
+instructions _        = "Enter 'on', 'off', 'state', or 'exit'."
 
 --------------------------------------------------------------------------------
 -- A background thread runs concurrently with the CLI, handling both network and
@@ -103,6 +105,7 @@ bg Motion send recv myID println = messageLoop recv handle(MotionDetected False)
                         writeChanM send (Broadcast myID (ReportState st))
                         return st
                      where st = MotionDetected v
+
 --------------------------------------------------------------------------------
 -- The door sensor pushes `ReportState` broadcast messages when its state is
 -- changed, and can also be queried for its state.
@@ -130,6 +133,16 @@ bg Door send recv myID println = messageLoop recv handle (DoorOpen False)
                         writeChanM send (Broadcast myID (ReportState st))
                         return st
                      where st = DoorOpen v
+
+--------------------------------------------------------------------------------
+-- The presence sensor pushes a Present broadcast message whenever the user
+-- presses ENTER on the console.
+
+bg Presence send recv myID println =
+  flip (messageLoop recv) () $ \_ msg -> case msg of
+    UserInput _ -> println "Sending broadcast." >> sendBrc myID Present send
+    Request c r -> sendRsp c (NotSupported (Device Presence) r) send
+    _           -> return ()
 
 --------------------------------------------------------------------------------
 -- Both the Smart Light Bulb and Smart Outlet behave identically, so they use

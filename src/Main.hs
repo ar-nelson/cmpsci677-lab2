@@ -17,6 +17,7 @@ usage = liftIO $ getProgName >>= \prog -> putStrLn $ unlines
   , "    - temp"
   , "    - motion"
   , "    - door"
+  , "    - presence"
   , "    - bulb"
   , "    - outlet"
   , "    - gateway"
@@ -47,6 +48,7 @@ start :: String -> String -> String -> Bool -> Timed ()
 start "temp"     h p    s = startDevice Temp h p s
 start "motion"   h p    s = startDevice Motion h p s
 start "door"     h p    s = startDevice Door h p s
+start "presence" h p    s = startDevice Presence h p s
 start "bulb"     h p    s = startDevice Bulb h p s
 start "outlet"   h p    s = startDevice Outlet h p s
 start "gateway"  _ port _ = startGateway port
