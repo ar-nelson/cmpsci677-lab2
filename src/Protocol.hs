@@ -50,9 +50,8 @@ data DBEvent = RegisterEvent MemberType
              | BroadcastEvent Broadcast
              deriving (Show, Read)
 
-data DBEventQuery = QueryJoin
+data DBEventQuery = QueryRegister
                   | QueryLeave
-                  | QueryRegister
                   | QueryReportState
                   | QueryChangeMode
                   | QueryTextMessage
@@ -66,7 +65,7 @@ data Request = Register MemberType
              | ChangeState OnOff
              | ReportTime ClockTime
              | LeaderOK
-             | Log Timestamp ID Broadcast
+             | DBInsert DBEntry
              | DBQuery [(ID, DBEventQuery)]
              deriving (Show, Read)
 

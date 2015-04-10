@@ -9,6 +9,7 @@ import           Control.Monad
 import           Control.Monad.Trans
 import           Data.List.Split
 import           Data.Word
+import           Network.Socket            (HostName)
 import           Safe                      (readMay)
 import           System.IO
 
@@ -35,7 +36,7 @@ askForDeviceID :: String -> Bool -> Timed ID
 askForDeviceID name silent = liftIO $ liftM ID $
   unless silent (putStr (name ++ " ID: ") >> hFlush stdout) >> readLn
 
-startController :: Controller -> String -> String -> Bool -> Timed ()
+startController :: Controller -> HostName -> String -> Bool -> Timed ()
 
 --------------------------------------------------------------------------------
 -- Task 1: Preventing Water Pipe Bursts
@@ -46,33 +47,35 @@ startController :: Controller -> String -> String -> Bool -> Timed ()
 
 startController Heater host port silent =
   do (send, recv, myID) <- connectWithTimeServer Controller host port silent
-     let println = liftIO . unless silent . putStrLn
+
      tempID   <- askForDeviceID "Temperature Sensor" silent
      outletID <- askForDeviceID "Smart Outlet" silent
      println "Running controller..."
+
      let handle :: MessageHandler Word32
          handle lastCID (Response conv rsp)
-           | conversationID conv == lastCID = case rsp of
+           | conversationID conv == lastCID =
+             case rsp of
                HasState (DegreesCelsius c) ->
-                 do when (c <= heatOnThreshold) $ lift $
-                      do conv' <- myID `to` outletID
-                         sendReq conv' (ChangeState On) send
-                         println "Heat on."
-                    when (c >= heatOffThreshold) $ lift $
-                      do conv' <- myID `to` outletID
-                         sendReq conv' (ChangeState Off) send
-                         println "Heat off."
-                    liftIO $ threadDelay tempCheckIntervalMicros
+                 do when (c <= heatOnThreshold)  (setState On)
+                    when (c >= heatOffThreshold) (setState Off)
+                    threadDelay tempCheckIntervalMicros
                     conv' <- myID `to` tempID
                     sendReq conv' QueryState send
                     return (conversationID conv')
-               _ -> fail $ "Unexpected " ++ show rsp
+               _ -> fail ("Unexpected " ++ show rsp)
            | otherwise = return lastCID
+           where setState o = lift $ do conv' <- myID `to` outletID
+                                        sendReq conv' (ChangeState o) send
+                                        println ("Heat " ++ show o ++ ".")
          handle st r = lift (println (show r)) >> return st
+
      conv <- myID `to` tempID
      sendReq conv QueryState send
      why <- messageLoop recv handle (conversationID conv)
-     println $ "Controller died: " ++ why
+     println ("Controller died: " ++ why)
+
+   where println = liftIO . unless silent . putStrLn
 
 --------------------------------------------------------------------------------
 -- Task 2: Preparing for Spring Break
@@ -84,20 +87,24 @@ startController Heater host port silent =
 
 startController Light host port silent =
   do (send, recv, myID) <- connectWithTimeServer Controller host port silent
-     let println = liftIO . unless silent . putStrLn
+
      motionID <- askForDeviceID "Motion Sensor" silent
      bulbID   <- askForDeviceID "Smart Light Bulb" silent
-     let lightTimer = do threadDelay lightDelayMicros
-                         println "Turning light off."
-                         conv <- myID `to` bulbID
-                         sendReq conv (ChangeState Off) send
-     timer <- newMVar =<< fork lightTimer
      println "Running controller..."
-     let resetTimer = fork lightTimer >>= swapMVar timer >>= killThread
-         awayMsg = TextMessage "Motion detected while user is away!"
-         handle :: MessageHandler Mode
+
+     timer <- newEmptyMVar :: Timed (MVar ThreadId)
+     let timerAction = do threadDelay lightDelayMicros
+                          println "Turning light off."
+                          conv <- myID `to` bulbID
+                          sendReq conv (ChangeState Off) send
+         resetTimer = fork timerAction >>= swapMVar timer >>= killThread
+     putMVar timer =<< fork timerAction
+
+     let handle :: MessageHandler Mode
+
          handle _ (Broadcast _ (ChangeMode st')) =
            lift (println ("Set user mode to " ++ show st')) >> return st'
+
          handle Home (Broadcast i (ReportState (MotionDetected True))) =
            do when (i == motionID) $ lift $
                 do conv <- myID `to` bulbID
@@ -105,18 +112,25 @@ startController Light host port silent =
                    println "Turning light on."
                    readMVar timer >>= killThread
               return Home
+
          handle Home (Broadcast i (ReportState (MotionDetected False))) =
            do when (i == motionID) $ lift $
                 println "Setting light timer." >> resetTimer
               return Home
+
          handle Away (Broadcast i (ReportState (MotionDetected True))) =
            do when (i == motionID) $ lift $
-                writeChanM send $ Broadcast myID awayMsg
+                writeChanM send (Broadcast myID awayMsg)
               return Away
+
          handle st (Response _ rsp) = lift (println (show rsp)) >> return st
          handle st _ = return st
+
      why <- messageLoop recv handle Home
-     println $ "Controller died: " ++ why
+     println ("Controller died: " ++ why)
+
+   where println = liftIO . unless silent . putStrLn
+         awayMsg = TextMessage "Motion detected while user is away!"
 
 --------------------------------------------------------------------------------
 -- The user interface is a special kind of controller: it takes console input in
@@ -129,64 +143,58 @@ startController Light host port silent =
 
 startController UserInterface host port silent =
   do (send, recv, myID) <- connectWithTimeServer Controller host port silent
-     let println = liftIO . unless silent . putStrLn
-         console = do liftIO $ unless silent $ do putStr "> "
-                                                  hFlush stdout
-                      input <- liftIO getLine
-                      if input == "exit"
-                        then println "Goodbye!"
-                        else do writeChanM recv $ UserInput input
-                                unless silent $ liftIO $ threadDelay 100000
-                                console
-         handle :: MessageHandler ()
+
+     println $ unlines
+       [ "Connected to host " ++ host ++ ":" ++ port ++ "."
+       , ""
+       , "Enter requests in the form 'ID -> Request'."
+       , "Messages without an 'ID ->' prefix are broadcasts."
+       , ""
+       , "Examples: \"1 -> QueryState\""
+       , "          \"2 -> ChangeState On\""
+       , "          \"ChangeMode Home\""
+       , "          \"ChangeMode Away\""
+       ]
+
+     let handle :: MessageHandler ()
          handle _ (UserInput s) =
            lift $ case splitOn "->" s of
              [ids, reqs] ->
                 maybe (println "Invalid input.")
-                      (\(i, r) -> myID `to` i >>= \c -> sendReq c r send) $
-                      do i <- readMay ids
-                         r <- readMay reqs
-                         return (ID i, r)
+                      (\(i, r) -> myID `to` i >>= \c -> sendReq c r send)
+                      $ do i <- readMay ids
+                           r <- readMay reqs
+                           return (ID i, r)
              [brcs] -> maybe (println "Invalid input.")
                              (\brc -> sendBrc myID brc send)
                              (readMay brcs)
              _ -> println "Invalid input: Only one -> is allowed."
          handle _ (Response _ rsp) =
-           void $ liftIO $ do unless silent (putStrLn "")
-                              putStr "RESPONSE: "
+           void $ liftIO $ do putStr "RESPONSE: "
                               putStrLn $ if silent then show rsp
                                                    else showRsp rsp
-                              unless silent (putStr "> ")
                               hFlush stdout
-         handle _ msg = void $ liftIO $ do unless silent (putStrLn "")
-                                           print msg
-                                           unless silent (putStr "> ")
-                                           hFlush stdout
-     println $ "Connected to host " ++ host ++ ":" ++ port ++ "."
-     println "\nEnter requests in the form 'ID -> Request'."
-     println "\nMessages without an 'ID ->' prefix are broadcasts."
-     println "Examples: \"1 -> QueryState\""
-     println "          \"2 -> ChangeState On\""
-     println "          \"ChangeMode Home\""
-     println "          \"ChangeMode Away\""
+         handle _ msg = void $ liftIO (print msg)
 
      _ <- fork $ do why <- messageLoop recv handle ()
                     println $ "Background thread died: " ++ why
-     console
-     writeChan send $ Left "Console interface closed."
-  where showRsp :: Response -> String
-        showRsp Success = "Success!"
-        showRsp (RegisteredAs i) = "Registered with " ++ show i
-        showRsp (HasState (DegreesCelsius c)) = show c ++ "\0176C"
-        showRsp (HasState (MotionDetected True)) = "Motion detected!"
-        showRsp (HasState (MotionDetected False)) = "No motion detected."
-        showRsp (HasState (DoorOpen True)) = "Door is open."
-        showRsp (HasState (DoorOpen False)) = "Door is closed."
-        showRsp (HasState (Power p)) = show p
-        showRsp (NotFound i) = "Error: No device with " ++ show i
-        showRsp (NotSupported mt req) =
-          "Error: " ++ show mt ++ " does not support request " ++ show req
-        showRsp rsp = show rsp
+     console send recv silent
+     killChanM send "Console interface closed."
+
+  where println = liftIO . unless silent . putStrLn
+        showRsp rsp = case rsp of
+          Success                         -> "Success!"
+          RegisteredAs i                  -> "Registered with " ++ show i
+          HasState (DegreesCelsius c)     -> show c ++ "\0176C"
+          HasState (MotionDetected True)  -> "Motion detected!"
+          HasState (MotionDetected False) -> "No motion detected."
+          HasState (DoorOpen True)        -> "Door is open."
+          HasState (DoorOpen False)       -> "Door is closed."
+          HasState (Power p)              -> show p
+          NotFound i          -> "Error: No device with " ++ show i
+          NotSupported mt req -> "Error: " ++ show mt
+            ++ " does not support request " ++ show req
+          _ -> show rsp
 
 startController TestLogger _ _ _ = undefined
 

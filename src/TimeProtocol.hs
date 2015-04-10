@@ -16,6 +16,7 @@ module TimeProtocol( Timestamp
                    , Timed
                    , runTimed
                    , updateClockOffset
+                   , updateLamport
                    , newTimestamp
                    , Timestamped
                    , timestampOf
@@ -47,11 +48,14 @@ newtype ClockTime = ClockTime UTCTime deriving (Eq, Ord, FormatTime, ParseTime)
 newtype ClockOffset = ClockOffset Double
                     deriving (Eq, Ord, Num, Fractional, Show, Read)
 
+clockTimeFormat :: String
+clockTimeFormat = iso8601DateFormat (Just "%T.%q")
+
 instance Show ClockTime where
-  show = formatTime defaultTimeLocale "%s%Q"
+  show = formatTime defaultTimeLocale clockTimeFormat
 
 instance Read ClockTime where
-  readsPrec _ = readSTime True defaultTimeLocale "%s%Q"
+  readsPrec _ = readSTime True defaultTimeLocale clockTimeFormat
 
 offsetBy :: ClockTime -> ClockOffset -> ClockTime
 ClockTime utc `offsetBy` ClockOffset ms = ClockTime (conv ms `addUTCTime` utc)
@@ -91,6 +95,12 @@ runTimed (Timed m) = runReaderT m
 updateClockOffset :: (MonadReader TimeState m, MonadIO m) => ClockOffset -> m ()
 updateClockOffset o = asks clockOffsetV >>= stm . flip modifyTVar (+ o)
 
+updateLamport :: (MonadReader TimeState m, MonadIO m) => Lamport -> m ()
+updateLamport newLamport =
+  do stLamport <- asks lamportTimeV
+     stm . modifyTVar stLamport $ \oldLamport ->
+       if newLamport >= oldLamport then newLamport + 1 else oldLamport
+
 newTimestamp :: (MonadReader TimeState m, MonadIO m) => m Timestamp
 newTimestamp = do stLamport  <- asks lamportTimeV
                   stOffset   <- asks clockOffsetV
@@ -111,10 +121,7 @@ stamp x = liftM (Timestamped x) newTimestamp
 
 unstamp :: (MonadReader TimeState m, MonadIO m) => Timestamped a -> m a
 unstamp (Timestamped x (Timestamp _ recvLamport)) =
-  do stLamport <- asks lamportTimeV
-     stm . modifyTVar stLamport $ \oldLamport ->
-       if recvLamport >= oldLamport then recvLamport + 1 else oldLamport
-     return x
+  updateLamport recvLamport >> return x
 
 stm :: (MonadIO m) => STM a -> m a
 stm = liftIO . atomically

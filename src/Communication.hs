@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeFamilies          #-}
 
 module Communication( connectToGateway
+                    , registerWithGateway
                     , connectAndRegister
                     , messageLoop
                     , socketToChannels
@@ -13,6 +14,7 @@ module Communication( connectToGateway
                     , sendRsp
                     , sendBrc
                     , to
+                    , console
                     , MessageM
                     , MessageChan
                     , MessageHandler
@@ -62,6 +64,30 @@ connectToGateway host port send recv silent =
           ) >>= \sock -> socketToChannels sock send recv silent
         onError = killChanM recv . show :: SomeException -> Timed ()
 
+registerWithGateway :: MemberType
+                    -> MessageChan
+                    -> MessageChan
+                    -> Bool
+                    -> Timed ID
+
+registerWithGateway mt send recv silent =
+  do conv <- invalidID `to` gatewayID
+     sendReq conv (Register mt) send
+     handleLoop (conversationID conv)
+  where handleLoop cid = readChanM recv >>= \m -> case m of
+          Response Conversation {conversationID = cid'} (RegisteredAs (ID i)) ->
+            if cid == cid'
+               then liftIO $ do unless silent $ putStr "Connected with ID "
+                                print i
+                                hFlush stdout
+                                return (ID i)
+               else handleLoop cid
+          Response Conversation {conversationID = cid'} rsp ->
+            if cid == cid'
+               then error $ "Invalid response to Register: " ++ show rsp
+               else handleLoop cid
+          _ -> handleLoop cid
+
 connectAndRegister :: MemberType
                    -> HostName
                    -> String
@@ -72,24 +98,8 @@ connectAndRegister mt host port silent =
   do send <- newChan
      recv <- newChan
      connectToGateway host port send recv silent
-     conv <- invalidID `to` gatewayID
-     sendReq conv (Register mt) send
-     let handleLoop =
-           do rspMsg <- readChanM recv
-              case rspMsg of
-                Response conv' rsp ->
-                  if conversationID conv == conversationID conv'
-                     then handleRsp rsp send recv
-                     else handleLoop
-                _ -> handleLoop
-     handleLoop
-  where handleRsp (RegisteredAs (ID i)) send recv =
-          liftIO $ do unless silent $ putStr "Connected with ID "
-                      print i
-                      hFlush stdout
-                      return (send, recv, ID i)
-        handleRsp rsp _ _ = error $
-          "Invalid response to Register: " ++ show rsp
+     myID <- registerWithGateway mt send recv silent
+     return (send, recv, myID)
 
 --------------------------------------------------------------------------------
 
@@ -187,4 +197,17 @@ req `to` rsp = do cid <- liftIO randomIO
                                       , responder = rsp
                                       , conversationID = cid
                                       }
+
+--------------------------------------------------------------------------------
+
+console :: MessageChan -> MessageChan -> Bool -> Timed ()
+
+console send recv silent =
+  do unless silent $ liftIO (putStr "> " >> hFlush stdout)
+     input <- liftIO getLine
+     if input == "exit" then exit else eval input
+  where exit       = unless silent $ liftIO (putStrLn "Goodbye!")
+        eval input = do writeChanM recv (UserInput input)
+                        unless silent $ threadDelay 1000000
+                        console send recv silent
 
