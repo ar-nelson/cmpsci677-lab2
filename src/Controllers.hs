@@ -8,8 +8,10 @@ import           Control.Concurrent.Lifted
 import           Control.Monad
 import           Control.Monad.Trans
 import           Data.List.Split
+import           Data.Time
 import           Data.Word
 import           Network.Socket            (HostName)
+import           Prelude                   hiding (log)
 import           Safe                      (readMay)
 import           System.IO
 
@@ -18,7 +20,7 @@ import           Protocol
 import           TimeProtocol
 import           TimeServer
 
-data Controller = Heater | Light | UserInterface | TestLogger
+data Controller = Heater | Light | Security | UserInterface | TestLogger
 
 askForDeviceID :: String -> Bool -> Timed ID
 askForDeviceID name silent = liftIO $ liftM ID $
@@ -133,7 +135,108 @@ startController Light host port silent =
 -- the home (door open followed by motion detected), then the controller will
 -- send a text message broadcast.
 
--- TODO
+startController Security host port silent =
+  do (send, recv, myID) <- connectWithTimeServer Controller host port silent
+
+     dbID       <- askForDeviceID "Database"        silent
+     motionID   <- askForDeviceID "Motion Sensor"   silent
+     doorID     <- askForDeviceID "Door Sensor"     silent
+     presenceID <- askForDeviceID "Presence Sensor" silent
+     println "Running controller..."
+
+     let handle :: MessageHandler (Maybe Word32)
+
+         handle st (Broadcast bid (ReportState (MotionDetected b)))
+           | bid /= motionID = return st
+           | otherwise = do log $ if b then "Motion detected."
+                                       else "No motion detected."
+                            sendQuery
+
+         handle st (Broadcast bid (ReportState (DoorOpen b)))
+           | bid /= doorID = return st
+           | otherwise = do log $ if b then "Door open."
+                                       else "Door closed."
+                            sendQuery
+
+         handle st (Broadcast bid Present) =
+           when (bid == presenceID) (log "Push event from presence sensor.")
+           >> return st
+
+         handle (Just cid) (Response Conversation { conversationID = cid' }
+                                     (DBResultSet [ Just doorOpenTime
+                                                  , Just doorCloseTime
+                                                  , Just motionTrueTime
+                                                  , maybeMotionFalseTime
+                                                  , maybePresenceTime
+                                                  ])) =
+           do when (cid == cid') $ lift $
+                if incomingOrder
+                   then if presenceDetected
+                             then do log "Owner came home."
+                                     sendBrc myID (ChangeMode Home) send
+                             else do log "Intruder detected!"
+                                     sendBrc myID intruderMsg send
+                   else when outgoingOrder $
+                          do log "Owner left home."
+                             sendBrc myID (ChangeMode Away) send
+              return Nothing
+
+           where outgoingOrder = case maybeMotionFalseTime of
+                   Just motionFalseTime ->
+                     within motionTimeout doorOpenTime motionFalseTime
+                     && doorOpenTime   `before` doorCloseTime
+                     && motionTrueTime `before` doorOpenTime
+                     && motionTrueTime `before` motionFalseTime
+                   Nothing -> False
+
+                 incomingOrder =
+                   within motionTimeout doorOpenTime motionTrueTime
+                   && doorOpenTime `before` motionTrueTime
+                   && doorCloseTime `before` doorOpenTime -- Prevents duplicates
+                   && maybe True (`before` motionTrueTime) maybeMotionFalseTime
+
+                 presenceDetected = case maybePresenceTime of
+                   Just presenceTime ->
+                     within presenceTimeout motionTrueTime presenceTime
+                   Nothing -> False
+
+         handle (Just cid) (Response Conversation { conversationID = cid' }
+                                     DBResultSet {})
+           | cid /= cid' = return (Just cid)
+           | otherwise   = return Nothing
+
+         handle (Just cid) (Response Conversation { conversationID = cid' } rsp)
+           | cid /= cid' = return (Just cid)
+           | otherwise   = do lift . println $
+                                "Invalid database response: " ++ show rsp
+                              return Nothing
+
+         handle st _ = return st
+
+         sendQuery =
+           do conv <- myID `to` dbID
+              sendReq conv (DBQuery query) send
+              return (Just (conversationID conv))
+           where { query =
+             [ (doorID,     BroadcastEvent (ReportState (DoorOpen True)))
+             , (doorID,     BroadcastEvent (ReportState (DoorOpen False)))
+             , (motionID,   BroadcastEvent (ReportState (MotionDetected True)))
+             , (motionID,   BroadcastEvent (ReportState (MotionDetected False)))
+             , (presenceID, BroadcastEvent Present)
+             ] }
+
+     why <- messageLoop recv handle Nothing
+     println ("Controller died: " ++ why)
+
+  where println         = liftIO . unless silent . putStrLn
+        log message     = liftIO $
+          do time <- getCurrentTime
+             putStrLn (formatTime defaultTimeLocale "%T > " time ++ message)
+        intruderMsg     = TextMessage "Intruder detected!"
+        a `before` b    = lamportTime a < lamportTime b
+        within time a b = abs (clockTime a `timeDiff` clockTime b) <= time
+        motionTimeout   = 60 -- 1 minute
+        presenceTimeout = 60 -- 1 minute
 
 --------------------------------------------------------------------------------
 -- The user interface is a special kind of controller: it takes console input in

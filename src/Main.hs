@@ -24,6 +24,7 @@ usage = liftIO $ getProgName >>= \prog -> putStrLn $ unlines
   , "    - database"
   , "    - control heater"
   , "    - control light"
+  , "    - control security"
   , "    - control user"
   , "    - control testlog"
   , "  <host> is the gateway hostname (0.0.0.0 for the gateway itself)."
@@ -56,9 +57,10 @@ start "database" h p    s = startDatabase h p s
 start _ _ _ _ = usage
 
 control :: String -> String -> String -> Bool -> Timed ()
-control "heater"  h p s = startController Heater h p s
-control "light"   h p s = startController Light h p s
-control "user"    h p s = startController UserInterface h p s
-control "testlog" h p s = startController TestLogger h p s
+control "heater"   h p s = startController Heater h p s
+control "light"    h p s = startController Light h p s
+control "security" h p s = startController Security h p s
+control "user"     h p s = startController UserInterface h p s
+control "testlog"  h p s = startController TestLogger h p s
 control _ _ _ _ = usage
 
