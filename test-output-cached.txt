@@ -1,0 +1,20 @@
+5
+02:33:47 > Motion detected.
+02:33:48 > Door open.
+02:33:48 > Door closed.
+02:33:49 > No motion detected.
+02:33:49 > Owner left home.
+02:33:49 > Door open.
+02:33:50 > Motion detected.
+02:33:50 > Intruder detected!
+02:33:51 > Door closed.
+02:33:51 > No motion detected.
+02:33:52 > Push event from presence sensor.
+02:33:52 > Door open.
+02:33:53 > Motion detected.
+02:33:53 > Owner came home.
+02:33:53 > Door closed.
+02:33:54 > Door open.
+02:33:54 > No motion detected.
+02:33:55 > Door closed.
+02:33:55 > Owner left home.

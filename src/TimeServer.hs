@@ -109,6 +109,7 @@ timeServer send recv downstreamRecv myID printFn =
                 do conv <- myID `to` otherID
                    sendReq conv LeaderOK send
                    beginElection
+              when (myID < otherID) $ setTimer beginElection beginElectionDelay
               return leader
          handle _ (Broadcast leader IWon)
            | leader < myID  = beginElection >> return leader

@@ -17,3 +17,4 @@ cabal.sandbox.config
 *.swp
 smarthome
 db.txt
+test-output.txt

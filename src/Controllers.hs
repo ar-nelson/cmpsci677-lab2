@@ -20,7 +20,7 @@ import           Protocol
 import           TimeProtocol
 import           TimeServer
 
-data Controller = Heater | Light | Security | UserInterface | TestLogger
+data Controller = Heater | Light | Security | UserInterface
 
 askForDeviceID :: String -> Bool -> Timed ID
 askForDeviceID name silent = liftIO $ liftM ID $
@@ -232,6 +232,7 @@ startController Security host port silent =
         log message     = liftIO $
           do time <- getCurrentTime
              putStrLn (formatTime defaultTimeLocale "%T > " time ++ message)
+             hFlush stdout
         intruderMsg     = TextMessage "Intruder detected!"
         a `before` b    = lamportTime a < lamportTime b
         within time a b = abs (clockTime a `timeDiff` clockTime b) <= time
@@ -301,6 +302,4 @@ startController UserInterface host port silent =
           NotSupported mt req -> "Error: " ++ show mt
             ++ " does not support request " ++ show req
           _ -> show rsp
-
-startController TestLogger _ _ _ = undefined
 
