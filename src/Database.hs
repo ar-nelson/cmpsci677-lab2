@@ -22,6 +22,9 @@ dbFilename = "db.txt"
 
 type DB = Map (ID, DBEvent) DBEntry
 
+--------------------------------------------------------------------------------
+-- Starts the database subprogram.
+
 startDatabase :: HostName -> String -> Bool -> Timed ()
 startDatabase host port silent =
   do initialDB <- reloadDatabase
@@ -30,7 +33,8 @@ startDatabase host port silent =
      (send, recv, _) <- connectWithTimeServer Database host port silent
      println "Starting database..."
 
-     let handle :: DB -> Message -> Timed DB
+     let -- Handles messages received over the network, and updates the `DB`.
+         handle :: DB -> Message -> Timed DB
 
          handle db (Request conv (DBInsert entry)) =
            do sendRsp conv Success send
@@ -46,6 +50,7 @@ startDatabase host port silent =
 
          handle db _ = return db
 
+         -- Outputs a new line in `db.txt`.
          writeEntry :: DBEntry -> Timed ()
          writeEntry entry = do println (show entry)
                                liftIO $ hPrint dbFile entry
@@ -57,6 +62,11 @@ startDatabase host port silent =
 
   where println = liftIO . unless silent . putStrLn
 
+--------------------------------------------------------------------------------
+-- Reads and replays an existing `db.txt` file, creating a `DB` containing the
+-- most recent entry for each (ID, event) pair. If there is no `db.txt` file,
+-- returns an empty `DB`.
+
 reloadDatabase :: Timed DB
 reloadDatabase = catch (liftIO (readFile dbFilename) >>= reload) err
   where initDB = Map.empty :: DB
@@ -67,6 +77,10 @@ reloadDatabase = catch (liftIO (readFile dbFilename) >>= reload) err
                                     where DBEntry _ time _ = e
         err e | isDoesNotExistError e = return initDB
               | otherwise             = liftIO $ ioError e
+
+--------------------------------------------------------------------------------
+-- Attempts to add an entry to the `DB`. The entry will only be added if it is
+-- the most recent entry (by Lamport clock time) for a given (ID, event) pair.
 
 addEntry :: DB -> DBEntry -> DB
 addEntry db (DBEntry id newTime event) =

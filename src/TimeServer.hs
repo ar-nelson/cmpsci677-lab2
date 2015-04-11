@@ -14,6 +14,9 @@ import           Communication
 import           Protocol
 import           TimeProtocol
 
+--------------------------------------------------------------------------------
+-- A combination of `connectAndRegister` and `runTimeServer`.
+
 connectWithTimeServer :: MemberType
                       -> HostName
                       -> String
@@ -24,6 +27,9 @@ connectWithTimeServer mt host port silent =
   do (send, upstreamRecv, myID) <- connectAndRegister mt host port silent
      downstreamRecv <- runTimeServer send upstreamRecv myID silent
      return (send, downstreamRecv, myID)
+
+--------------------------------------------------------------------------------
+-- Runs `timeServer` in a new thread, and returns its downstream recv channel.
 
 runTimeServer :: MessageChan
               -> MessageChan
@@ -40,6 +46,17 @@ runTimeServer send recv myID silent =
      return downstreamRecv
   where println = unless silent . putStrLn
 
+
+--------------------------------------------------------------------------------
+-- The time server intercepts messages on its recv channel, processes relevant
+-- messages, and forwards all others to the downstreamRecv channel.
+--
+-- It uses the bully algorithm to elect a leader from among all of the time
+-- servers in the cluster. The leader polls the other time servers for their
+-- current time every 30 seconds, and adjusts everyone's time offset
+-- accordingly. If a time server does not receive a query for 1 minute,
+-- it starts a new leader election.
+
 timeServer :: MessageChan
            -> MessageChan
            -> MessageChan
@@ -53,21 +70,34 @@ timeServer send recv downstreamRecv myID printFn =
      times <- stm $ newTVar Map.empty :: Timed (TVar (Map ID ClockTime))
      convs <- stm $ newTVar Map.empty :: Timed (TVar (Map ID Conversation))
      _ <- fork . forever . join $ takeMVar timerAction
-     let setTimer action delay =
+
+     let -- Cancels the current timer and sets a new one, which will run
+         -- `action` after `delay` seconds.
+         setTimer action delay =
            do tryTakeMVar timer >>= traverse_ killThread
               t <- fork $ do threadDelay (delay * seconds)
                              putMVar timerAction action
               putMVar timer t
+
+         -- Becomes the leader, and sends an 'IWon' to everyone.
          becomeLeader = do sendBrc myID IWon send
                            debug "Became leader."
+
+         -- Starts a new election and waits for a `LeaderOK`. Becomes the leader
+         -- in 5 seconds if one is not received.
          beginElection = do sendBrc myID Election send
                             setTimer becomeLeader becomeLeaderDelay
                             debug "Starting election..."
+
+         -- Queries all other time servers for their current time.
          queryTime = do time <- fmap clockTime newTimestamp
                         stm $ do writeTVar times (Map.fromList [(myID, time)])
                                  writeTVar convs Map.empty
                         sendBrc myID QueryTime send
                         setTimer updateTime updateTimeDelay
+
+         -- Averages all received clock times from all other time servers,
+         -- then sends out adjustments.
          updateTime = do debug "Updating time..."
                          tmap <- stm $ readTVar times
                          let myTime = tmap ! myID
@@ -81,6 +111,9 @@ timeServer send recv downstreamRecv myID printFn =
                                                return (m ! i)
                               sendRsp conv (AdjustTime (off - avg)) send
                          setTimer queryTime (queryTimeDelay - updateTimeDelay)
+
+         -- Handles messages received over the `recv` channel.
+         -- Its state value (of type `ID`) is the current leader's ID.
          handle :: ID -> Message -> Timed ID
          handle leader (Request conv (ReportTime t)) =
            do when (leader == myID) $
@@ -118,9 +151,11 @@ timeServer send recv downstreamRecv myID printFn =
                             debug $ "LEADER IS NOW " ++ show leader
                             return leader
          handle leader msg = writeChanM downstreamRecv msg >> return leader
+
      beginElection
      finally (messageLoop recv ((lift .) . handle) myID)
              (tryTakeMVar timer >>= traverse_ killThread)
+
   where becomeLeaderDelay  = 5
         beginElectionDelay = 60
         queryTimeDelay     = 30
